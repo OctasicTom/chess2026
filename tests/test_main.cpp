@@ -3,7 +3,11 @@
 #include <set>
 #include <string>
 #include "../src/chess/Attacks.h"
+#include <sstream>
+#include "../src/chess/Fen.h"
 #include "../src/chess/MoveGenerator.h"
+#include "../src/chess/Perft.h"
+#include "../src/ui/GameLoop.h"
 #include "../src/chess/Notation.h"
 #include "../src/chess/Position.h"
 
@@ -349,12 +353,238 @@ void testLegalMoves() {
     }
 }
 
+Position fromFen(const char* fen) {
+    const auto p = parseFen(fen);
+    CHECK(p.has_value());
+    return p ? *p : Position{};
+}
+
+bool hasMove(const Position& p, const char* text) { return legalOf(p).count(text) != 0; }
+
+const Move* findMove(const MoveList& list, const char* text) {
+    for (const Move& m : list) if (moveToString(m) == text) return &m;
+    return nullptr;
+}
+
+void testFen() {
+    CHECK(toFen(Position::startingPosition()) == kStartingFen);
+    Position s = fromFen(kStartingFen);
+    CHECK(s.sideToMove == Color::White);
+    CHECK(s.castlingRights == (CastleWhiteKing | CastleWhiteQueen | CastleBlackKing | CastleBlackQueen));
+    CHECK(s.enPassantSquare == kNoSquare);
+    CHECK(s.halfmoveClock == 0 && s.fullmoveNumber == 1);
+    CHECK(s.board.at(*squareFromString("e1")) == (Piece{PieceType::King, Color::White}));
+    CHECK(s.board.at(*squareFromString("d8")) == (Piece{PieceType::Queen, Color::Black}));
+
+    const char* e4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+    Position a = fromFen(e4);
+    CHECK(a.sideToMove == Color::Black);
+    CHECK(a.enPassantSquare == *squareFromString("e3"));
+    CHECK(toFen(a) == e4);
+
+    Position b = fromFen("r3k2r/8/8/8/8/8/8/R3K2R w Kq - 37 85");
+    CHECK(b.castlingRights == (CastleWhiteKing | CastleBlackQueen));
+    CHECK(b.halfmoveClock == 37 && b.fullmoveNumber == 85);
+    CHECK(toFen(b) == "r3k2r/8/8/8/8/8/8/R3K2R w Kq - 37 85");
+
+    Position none = fromFen("4k3/8/8/8/8/8/8/4K3 w - - 0 1");
+    CHECK(none.castlingRights == 0);
+
+    // Counters, castling and en passant evolve correctly while playing
+    Position g = Position::startingPosition();
+    applyText(g, "e2e4");
+    CHECK(toFen(g) == e4);
+    applyText(g, "c7c5");
+    CHECK(toFen(g) == "rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR w KQkq c6 0 2");
+    applyText(g, "g1f3");
+    CHECK(toFen(g) == "rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2");
+
+    // Short (4-field) FEN and rejects
+    CHECK(parseFen("4k3/8/8/8/8/8/8/4K3 w - -").has_value());
+    CHECK(!parseFen(""));
+    CHECK(!parseFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP w KQkq - 0 1"));
+    CHECK(!parseFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBN w KQkq - 0 1"));
+    CHECK(!parseFen("rnbqkbnr/pppppppp/9/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"));
+    CHECK(!parseFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNX w KQkq - 0 1"));
+    CHECK(!parseFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR x KQkq - 0 1"));
+    CHECK(!parseFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkz - 0 1"));
+    CHECK(!parseFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq e4 0 1"));
+    CHECK(!parseFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - x 1"));
+    CHECK(!parseFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 0"));
+}
+
+void testSpecialMoves() {
+    const char* both = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1";
+
+    // Castling
+    {
+        Position p = fromFen(both);
+        CHECK(hasMove(p, "e1g1") && hasMove(p, "e1c1"));
+        const MoveList moves = generateLegalMoves(p);
+        CHECK(findMove(moves, "e1g1")->has(MoveFlagCastleKing));
+        CHECK(findMove(moves, "e1c1")->has(MoveFlagCastleQueen));
+        Position k = p; applyText(k, "e1g1");
+        CHECK(toFen(k) == "r3k2r/8/8/8/8/8/8/R4RK1 b kq - 1 1");
+        Position q = p; applyText(q, "e1c1");
+        CHECK(toFen(q) == "r3k2r/8/8/8/8/8/8/2KR3R b kq - 1 1");
+        Position bk = fromFen("r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1");
+        CHECK(hasMove(bk, "e8g8") && hasMove(bk, "e8c8"));
+        applyText(bk, "e8c8");
+        CHECK(toFen(bk) == "2kr3r/8/8/8/8/8/8/R3K2R w KQ - 1 2");
+        applyText(bk, "e1g1");  // sanity: applyMove infers castling without flags
+        CHECK(toFen(bk) == "2kr3r/8/8/8/8/8/8/R4RK1 b - - 2 2");
+    }
+    // Castling in check, through check, onto check, with blocked squares
+    {
+        Position inCheck = fromFen("4r1k1/8/8/8/8/8/8/R3K2R w KQ - 0 1");
+        CHECK(!hasMove(inCheck, "e1g1") && !hasMove(inCheck, "e1c1"));
+        Position throughK = fromFen("5rk1/8/8/8/8/8/8/R3K2R w KQ - 0 1");
+        CHECK(!hasMove(throughK, "e1g1") && hasMove(throughK, "e1c1"));
+        Position throughQ = fromFen("3r2k1/8/8/8/8/8/8/R3K2R w KQ - 0 1");
+        CHECK(!hasMove(throughQ, "e1c1") && hasMove(throughQ, "e1g1"));
+        Position ontoK = fromFen("6rk/8/8/8/8/8/8/R3K2R w KQ - 0 1");
+        CHECK(!hasMove(ontoK, "e1g1") && hasMove(ontoK, "e1c1"));
+        Position bAttacked = fromFen("1r4k1/8/8/8/8/8/8/R3K2R w KQ - 0 1");  // b1 attacked: queenside still legal
+        CHECK(hasMove(bAttacked, "e1c1"));
+        Position blocked = fromFen("r3k2r/8/8/8/8/8/8/RN2KB1R w KQkq - 0 1");
+        CHECK(!hasMove(blocked, "e1g1") && !hasMove(blocked, "e1c1"));
+        Position noRights = fromFen("r3k2r/8/8/8/8/8/8/R3K2R w - - 0 1");
+        CHECK(!hasMove(noRights, "e1g1") && !hasMove(noRights, "e1c1"));
+    }
+    // Rights lost after king move / rook move / rook capture
+    {
+        Position p = fromFen(both);
+        for (const char* mv : {"e1d1", "e8d8", "d1e1", "d8e8"}) applyText(p, mv);
+        CHECK(p.castlingRights == 0);
+        CHECK(!hasMove(p, "e1g1") && !hasMove(p, "e1c1"));
+
+        Position r = fromFen(both);
+        applyText(r, "a1b1"); applyText(r, "a8b8"); applyText(r, "b1a1"); applyText(r, "b8a8");
+        CHECK(!hasMove(r, "e1c1") && hasMove(r, "e1g1"));
+        CHECK(r.castlingRights == (CastleWhiteKing | CastleBlackKing));
+
+        Position c = fromFen("r3k2r/8/8/8/8/8/6b1/R3K2R b KQkq - 0 1");
+        applyText(c, "g2h1");
+        CHECK(!(c.castlingRights & CastleWhiteKing) && (c.castlingRights & CastleWhiteQueen));
+        CHECK(!hasMove(c, "e1g1"));
+        Position c2 = fromFen("r3k2r/1B6/8/8/8/8/8/R3K2R w KQkq - 0 1");
+        applyText(c2, "b7a8");
+        CHECK(!(c2.castlingRights & CastleBlackQueen) && (c2.castlingRights & CastleBlackKing));
+    }
+    // En passant
+    {
+        Position p = fromFen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1");
+        const MoveList moves = generateLegalMoves(p);
+        const Move* ep = findMove(moves, "e5d6");
+        CHECK(ep && ep->has(MoveFlagEnPassant) && ep->has(MoveFlagCapture));
+        applyText(p, "e5d6");
+        CHECK(toFen(p) == "4k3/8/3P4/8/8/8/8/4K3 b - - 0 1");
+
+        Position d = fromFen("4k3/3p4/8/4P3/8/8/8/4K3 b - - 0 1");
+        applyText(d, "d7d5");
+        CHECK(d.enPassantSquare == *squareFromString("d6"));
+        CHECK(hasMove(d, "e5d6"));
+        applyText(d, "e1e2");   // white declines
+        CHECK(d.enPassantSquare == kNoSquare);
+        applyText(d, "e8e7");
+        CHECK(!hasMove(d, "e5d6"));
+
+        // Black capturing en passant
+        Position bl = fromFen("4k3/8/8/8/3pP3/8/8/4K3 b - e3 0 1");
+        CHECK(hasMove(bl, "d4e3"));
+        applyText(bl, "d4e3");
+        CHECK(toFen(bl) == "4k3/8/8/8/8/4p3/8/4K3 w - - 0 2");
+
+        // Exposes own king along the rank: illegal
+        Position x = fromFen("8/8/8/K2pP2r/8/8/8/4k3 w - d6 0 1");
+        CHECK(movesOf(x).count("e5d6"));
+        CHECK(!hasMove(x, "e5d6") && hasMove(x, "e5e6"));
+
+        // No ep move unless a pawn is really there / wrong side pawns
+        Position none = fromFen("4k3/8/8/4P3/8/8/8/4K3 w - d6 0 1");
+        CHECK(!hasMove(none, "e5d6"));
+    }
+    // Promotion
+    {
+        Position p = fromFen("8/P6k/8/8/8/8/8/K7 w - - 0 1");
+        const S m = legalOf(p);
+        CHECK(m.count("a7a8q") && m.count("a7a8r") && m.count("a7a8b") && m.count("a7a8n"));
+        CHECK(!m.count("a7a8"));
+        CHECK(movesFrom(p, "a7").size() == 4);
+        const MoveList list = generateLegalMoves(p);
+        CHECK(findMove(list, "a7a8n")->promotion == PieceType::Knight);
+        CHECK(findMove(list, "a7a8n")->has(MoveFlagPromotion));
+        Position n = p; applyText(n, "a7a8n");
+        CHECK(n.board.at(*squareFromString("a8")) == (Piece{PieceType::Knight, Color::White}));
+        Position r = p; applyText(r, "a7a8r");
+        CHECK(toFen(r) == "R7/7k/8/8/8/8/8/K7 b - - 0 1");
+
+        Position cap = fromFen("1n5k/P7/8/8/8/8/8/K7 w - - 0 1");
+        const S c = legalOf(cap);
+        CHECK(c.count("a7b8q") && c.count("a7b8r") && c.count("a7b8b") && c.count("a7b8n"));
+        CHECK(c.count("a7a8q") && c.size() >= 8);
+        const MoveList capMoves = generateLegalMoves(cap);
+        const Move* mv = findMove(capMoves, "a7b8q");
+        CHECK(mv && mv->has(MoveFlagCapture) && mv->has(MoveFlagPromotion));
+        applyText(cap, "a7b8q");
+        CHECK(toFen(cap) == "1Q5k/8/8/8/8/8/8/K7 b - - 0 1");
+
+        Position black = fromFen("k7/8/8/8/8/8/p7/7K b - - 0 1");
+        CHECK(legalOf(black) == (S{"a8a7", "a8b8", "a8b7", "a2a1q", "a2a1r", "a2a1b", "a2a1n"}));
+    }
+}
+
+void testPerft() {
+    const Position start = Position::startingPosition();
+    CHECK(perft(start, 1) == 20);
+    CHECK(perft(start, 2) == 400);
+    CHECK(perft(start, 3) == 8902);
+    CHECK(perft(start, 4) == 197281);
+
+    const Position kiwi = fromFen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1");
+    CHECK(perft(kiwi, 1) == 48 && perft(kiwi, 2) == 2039 && perft(kiwi, 3) == 97862);
+    const Position p3 = fromFen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1");
+    CHECK(perft(p3, 1) == 14 && perft(p3, 2) == 191 && perft(p3, 3) == 2812 && perft(p3, 4) == 43238);
+    const Position p4 = fromFen("r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1");
+    CHECK(perft(p4, 1) == 6 && perft(p4, 2) == 264 && perft(p4, 3) == 9467);
+    const Position p5 = fromFen("rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8");
+    CHECK(perft(p5, 1) == 44 && perft(p5, 2) == 1486 && perft(p5, 3) == 62379);
+}
+
+void testGameLoop() {
+    std::istringstream in("f2f3\nzz\ne2e5\ne7e8\ne7e5\ne7e5\ng2g4\nd8h4\n");
+    std::ostringstream out;
+    ui::runHumanVsHuman(in, out, Position::startingPosition());
+    const std::string s = out.str();
+    CHECK(s.find("Invalid input") != std::string::npos);
+    CHECK(s.find("Illegal move: e2e5") != std::string::npos);  // black to move: no black piece on e2
+    CHECK(s.find("Checkmate! Black wins.") != std::string::npos);
+    std::istringstream inC("quit\n");
+    std::ostringstream outC;
+    ui::runHumanVsHuman(inC, outC, fromFen("4r1k1/8/8/8/8/8/8/4K3 w - - 0 1"));
+    CHECK(outC.str().find("White is in check.") != std::string::npos);
+
+    std::istringstream in2("a7a8\na7a8q\nquit\n");
+    std::ostringstream out2;
+    ui::runHumanVsHuman(in2, out2, fromFen("8/P6k/8/8/8/8/8/K7 w - - 0 1"));
+    CHECK(out2.str().find("Promotion piece required") != std::string::npos);
+    CHECK(out2.str().find("Game abandoned.") != std::string::npos);
+
+    std::istringstream in3("");
+    std::ostringstream out3;
+    ui::runHumanVsHuman(in3, out3, fromFen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"));
+    CHECK(out3.str().find("Stalemate") != std::string::npos);
+}
 }  // namespace
 
 int main() {
     testMoveGeneration();
     testAttacks();
     testLegalMoves();
+    testFen();
+    testSpecialMoves();
+    testPerft();
+    testGameLoop();
     const Position p = Position::startingPosition();
     CHECK(p.sideToMove == Color::White);
     CHECK(p.board.at(makeSquare(4, 0)) == (Piece{PieceType::King, Color::White}));
@@ -403,6 +633,9 @@ int main() {
     std::cout << (failures ? "Tests failed\n" : "All tests passed\n");
     return failures;
 }
+
+
+
 
 
 

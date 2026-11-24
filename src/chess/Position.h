@@ -18,10 +18,10 @@ struct Position {
 
     static Position startingPosition();
 
-    // Applies a normal move (including normal captures) and passes the turn. Does not check
-    // legality. Castling, en passant and promotion are not handled yet.
+    // Applies a move and passes the turn, updating castling rights, en passant target and clocks.\n    // Handles captures, castling, en passant and promotion. Does not check legality.
     void applyMove(const Move& move);
 };
 
 }  // namespace chess
+
 

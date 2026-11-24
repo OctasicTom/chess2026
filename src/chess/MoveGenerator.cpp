@@ -10,6 +10,7 @@ struct Delta { int df, dr; };
 const Delta kKnightDeltas[] = {{1, 2}, {2, 1}, {2, -1}, {1, -2}, {-1, -2}, {-2, -1}, {-2, 1}, {-1, 2}};
 const Delta kDiagonalDeltas[] = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
 const Delta kOrthogonalDeltas[] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+const PieceType kPromotionTypes[] = {PieceType::Queen, PieceType::Rook, PieceType::Bishop, PieceType::Knight};
 
 bool onBoard(int file, int rank) { return file >= 0 && file < 8 && rank >= 0 && rank < 8; }
 
@@ -28,24 +29,31 @@ public:
                 case PieceType::Bishop: slide(from, kDiagonalDeltas); break;
                 case PieceType::Rook: slide(from, kOrthogonalDeltas); break;
                 case PieceType::Queen: slide(from, kDiagonalDeltas); slide(from, kOrthogonalDeltas); break;
-                case PieceType::King: step(from, kDiagonalDeltas); step(from, kOrthogonalDeltas); break;
+                case PieceType::King:
+                    step(from, kDiagonalDeltas);
+                    step(from, kOrthogonalDeltas);
+                    castling();
+                    break;
                 case PieceType::None: break;
             }
         }
     }
 
 private:
+    void add(Square from, Square to, int flags, PieceType promotion = PieceType::None) {
+        out_.push_back(Move{from, to, promotion, static_cast<std::uint8_t>(flags)});
+    }
+
     // Adds a move if the target is empty or an enemy piece. Returns true if the target was empty.
     bool addIfAllowed(Square from, int file, int rank) {
         if (!onBoard(file, rank)) return false;
         const Square to = makeSquare(file, rank);
         const Piece target = pos_.board.at(to);
         if (target.empty()) {
-            out_.push_back(Move{from, to, PieceType::None, MoveFlagNone});
+            add(from, to, MoveFlagNone);
             return true;
         }
-        if (target.color != us_)
-            out_.push_back(Move{from, to, PieceType::None, MoveFlagCapture});
+        if (target.color != us_) add(from, to, MoveFlagCapture);
         return false;
     }
 
@@ -62,23 +70,62 @@ private:
         }
     }
 
+    // Adds a pawn move, expanding into the four promotion choices on the last rank.
+    void pawnMove(Square from, Square to, int flags) {
+        const int promoRank = us_ == Color::White ? 7 : 0;
+        if (rankOf(to) == promoRank) {
+            for (PieceType t : kPromotionTypes) add(from, to, flags | MoveFlagPromotion, t);
+        } else {
+            add(from, to, flags);
+        }
+    }
+
     void pawn(Square from) {
         const int dir = us_ == Color::White ? 1 : -1;
         const int startRank = us_ == Color::White ? 1 : 6;
         const int f = fileOf(from), r = rankOf(from);
 
         if (onBoard(f, r + dir) && pos_.board.at(makeSquare(f, r + dir)).empty()) {
-            out_.push_back(Move{from, makeSquare(f, r + dir), PieceType::None, MoveFlagNone});
+            pawnMove(from, makeSquare(f, r + dir), MoveFlagNone);
             if (r == startRank && pos_.board.at(makeSquare(f, r + 2 * dir)).empty())
-                out_.push_back(Move{from, makeSquare(f, r + 2 * dir), PieceType::None, MoveFlagDoublePush});
+                add(from, makeSquare(f, r + 2 * dir), MoveFlagDoublePush);
         }
         for (int df : {-1, 1}) {
             if (!onBoard(f + df, r + dir)) continue;
             const Square to = makeSquare(f + df, r + dir);
             const Piece target = pos_.board.at(to);
-            if (!target.empty() && target.color != us_)
-                out_.push_back(Move{from, to, PieceType::None, MoveFlagCapture});
+            if (!target.empty()) {
+                if (target.color != us_) pawnMove(from, to, MoveFlagCapture);
+            } else if (to == pos_.enPassantSquare &&
+                       pos_.board.at(makeSquare(f + df, r)) == Piece{PieceType::Pawn, opposite(us_)}) {
+                add(from, to, MoveFlagCapture | MoveFlagEnPassant);
+            }
         }
+    }
+
+    bool empty(int file, int rank) const { return pos_.board.at(makeSquare(file, rank)).empty(); }
+    bool attacked(int file, int rank) const {
+        return isSquareAttacked(pos_, makeSquare(file, rank), opposite(us_));
+    }
+
+    void castling() {
+        const bool white = us_ == Color::White;
+        const int rank = white ? 0 : 7;
+        const Square kingSq = makeSquare(4, rank);
+        if (pos_.board.at(kingSq) != Piece{PieceType::King, us_}) return;
+        const Piece ourRook{PieceType::Rook, us_};
+        const int kingRight = white ? CastleWhiteKing : CastleBlackKing;
+        const int queenRight = white ? CastleWhiteQueen : CastleBlackQueen;
+        if (!(pos_.castlingRights & (kingRight | queenRight))) return;
+        if (attacked(4, rank)) return;
+
+        if ((pos_.castlingRights & kingRight) && pos_.board.at(makeSquare(7, rank)) == ourRook &&
+            empty(5, rank) && empty(6, rank) && !attacked(5, rank) && !attacked(6, rank))
+            add(kingSq, makeSquare(6, rank), MoveFlagCastleKing);
+
+        if ((pos_.castlingRights & queenRight) && pos_.board.at(makeSquare(0, rank)) == ourRook &&
+            empty(1, rank) && empty(2, rank) && empty(3, rank) && !attacked(3, rank) && !attacked(2, rank))
+            add(kingSq, makeSquare(2, rank), MoveFlagCastleQueen);
     }
 
     const Position& pos_;

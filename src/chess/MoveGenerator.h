@@ -6,8 +6,8 @@ namespace chess {
 
 using MoveList = std::vector<Move>;
 
-// Pseudo-legal moves for position.sideToMove. Does not consider check, pins, castling,
-// en passant or promotion (a pawn reaching the last rank yields a plain, non-promoting move).
+// Pseudo-legal moves for position.sideToMove, including castling (fully checked), en passant and
+// promotion (four moves per promoting pawn move). Moves that leave the king in check are included.
 MoveList generatePseudoLegalMoves(const Position& position);
 
 // Fully legal moves for the supported rules: pseudo-legal moves that do not leave the mover's
@@ -21,4 +21,5 @@ GameStatus getGameStatus(const Position& position);
 const char* describe(GameStatus status);
 
 }  // namespace chess
+
 
