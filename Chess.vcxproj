@@ -59,6 +59,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="src\chess\Types.h" />
+    <ClInclude Include="src\chess\Attacks.h" />
+    <ClInclude Include="src\chess\MoveGenerator.h" />
     <ClInclude Include="src\chess\Notation.h" />
     <ClInclude Include="src\chess\Board.h" />
     <ClInclude Include="src\chess\Position.h" />
@@ -68,6 +70,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\chess\Types.cpp" />
+    <ClCompile Include="src\chess\Attacks.cpp" />
+    <ClCompile Include="src\chess\MoveGenerator.cpp" />
     <ClCompile Include="src\chess\Notation.cpp" />
     <ClCompile Include="src\chess\Board.cpp" />
     <ClCompile Include="src\chess\Position.cpp" />
@@ -76,4 +80,6 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
+
+
 

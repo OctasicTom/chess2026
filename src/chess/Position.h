@@ -17,6 +17,11 @@ struct Position {
     int fullmoveNumber = 1;
 
     static Position startingPosition();
+
+    // Applies a normal move (including normal captures) and passes the turn. Does not check
+    // legality. Castling, en passant and promotion are not handled yet.
+    void applyMove(const Move& move);
 };
 
 }  // namespace chess
+

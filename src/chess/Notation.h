@@ -8,6 +8,8 @@ namespace chess {
 
 // Square <-> algebraic name ("a1" = 0 ... "h8" = 63).
 std::string squareToString(Square s);  // returns "??" for invalid squares
+// Coordinate notation, e.g. "e2e4" or "e7e8q".
+std::string moveToString(const Move& move);
 std::optional<Square> squareFromString(std::string_view name);  // lowercase a-h, 1-8 only
 
 enum class MoveParseError {
@@ -33,3 +35,4 @@ MoveParseResult parseMove(std::string_view text);
 const char* describe(MoveParseError error);
 
 }  // namespace chess
+

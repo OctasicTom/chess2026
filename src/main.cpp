@@ -1,5 +1,7 @@
 ﻿#include <iostream>
 #include <string>
+#include "chess/Attacks.h"
+#include "chess/MoveGenerator.h"
 #include "chess/Notation.h"
 #include "chess/Position.h"
 #include "ui/ConsoleView.h"
@@ -7,6 +9,15 @@
 int main() {
     const chess::Position position = chess::Position::startingPosition();
     ui::printPosition(std::cout, position);
+
+    const chess::MoveList moves = chess::generateLegalMoves(position);
+    std::cout << "\nSide to move in check: "
+              << (chess::isKingInCheck(position, position.sideToMove) ? "yes" : "no") << "\n";
+    std::cout << "Legal moves:\n";
+    for (const chess::Move& mv : moves) std::cout << chess::moveToString(mv) << ' ';
+    std::cout << "\nTotal: " << moves.size() << " legal moves\n";
+    const chess::GameStatus status = chess::getGameStatus(position);
+    if (status != chess::GameStatus::Ongoing) std::cout << chess::describe(status) << "\n";
 
     std::cout << "\nEnter a move (e.g. e2e4, e7e8q): ";
     std::string line;
@@ -26,3 +37,5 @@ int main() {
         std::cout << "Promotion:   " << chess::Piece{result.move.promotion, chess::Color::White}.toChar() << '\n';
     return 0;
 }
+
+

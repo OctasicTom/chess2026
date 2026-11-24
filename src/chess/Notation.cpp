@@ -20,6 +20,18 @@ std::string squareToString(Square s) {
     return std::string{static_cast<char>('a' + fileOf(s)), static_cast<char>('1' + rankOf(s))};
 }
 
+std::string moveToString(const Move& move) {
+    std::string s = squareToString(move.from) + squareToString(move.to);
+    switch (move.promotion) {
+        case PieceType::Queen: s += 'q'; break;
+        case PieceType::Rook: s += 'r'; break;
+        case PieceType::Bishop: s += 'b'; break;
+        case PieceType::Knight: s += 'n'; break;
+        default: break;
+    }
+    return s;
+}
+
 std::optional<Square> squareFromString(std::string_view name) {
     if (name.size() != 2) return std::nullopt;
     const char f = name[0], r = name[1];
@@ -72,3 +84,4 @@ const char* describe(MoveParseError error) {
 }
 
 }  // namespace chess
+
