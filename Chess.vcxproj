@@ -59,6 +59,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="src\chess\Types.h" />
+    <ClInclude Include="src\engine\Evaluation.h" />
+    <ClInclude Include="src\players\ComputerPlayer.h" />
     <ClInclude Include="src\players\Player.h" />
     <ClInclude Include="src\players\HumanPlayer.h" />
     <ClInclude Include="src\players\RandomComputerPlayer.h" />
@@ -76,6 +78,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\chess\Types.cpp" />
+    <ClCompile Include="src\engine\Evaluation.cpp" />
+    <ClCompile Include="src\engine\Search.cpp" />
+    <ClCompile Include="src\players\ComputerPlayer.cpp" />
     <ClCompile Include="src\players\HumanPlayer.cpp" />
     <ClCompile Include="src\players\RandomComputerPlayer.cpp" />
     <ClCompile Include="src\ui\ConsoleView.cpp" />
@@ -92,6 +97,7 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
+
 
 
 

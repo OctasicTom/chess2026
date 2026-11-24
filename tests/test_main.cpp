@@ -7,6 +7,9 @@
 #include "../src/chess/Fen.h"
 #include "../src/chess/MoveGenerator.h"
 #include "../src/chess/Perft.h"
+#include "../src/engine/Evaluation.h"
+#include "../src/engine/Search.h"
+#include "../src/players/ComputerPlayer.h"
 #include "../src/players/HumanPlayer.h"
 #include "../src/players/RandomComputerPlayer.h"
 #include "../src/ui/GameLoop.h"
@@ -698,12 +701,175 @@ void testPlayers() {
     }
     // Menu validation
     {
-        std::istringstream in("x\n3\n\n2\n 1 \n");
+        std::istringstream in("x\n4\n\n2\n 1 \n3\n");
         std::ostringstream out;
-        CHECK(ui::promptPlayerKind(in, out, "White") == ui::PlayerKind::Computer);
-        CHECK(out.str().find("Please enter 1 or 2.") != std::string::npos);
+        CHECK(ui::promptPlayerKind(in, out, "White") == ui::PlayerKind::RandomComputer);
+        CHECK(out.str().find("Please enter 1, 2 or 3.") != std::string::npos);
         CHECK(ui::promptPlayerKind(in, out, "Black") == ui::PlayerKind::Human);
+        CHECK(ui::promptPlayerKind(in, out, "Black") == ui::PlayerKind::SearchComputer);
         CHECK(!ui::promptPlayerKind(in, out, "Black").has_value());
+
+        std::istringstream d("0\n7\nabc\n12\n\n5\n");
+        std::ostringstream dout;
+        CHECK(ui::promptSearchDepth(d, dout) == ui::kDefaultSearchDepth);  // after four rejected entries
+        CHECK(ui::promptSearchDepth(d, dout) == 5);
+        CHECK(!ui::promptSearchDepth(d, dout).has_value());
+    }
+}
+
+std::string bestMoveText(const char* fen, int depth, int* score = nullptr) {
+    const engine::SearchResult r = engine::findBestMove(fromFen(fen), depth);
+    if (score) *score = r.score;
+    return r.bestMove.isNull() ? std::string("none") : moveToString(r.bestMove);
+}
+
+void testEvaluation() {
+    using namespace engine;
+    CHECK(evaluate(Position::startingPosition()) == 0);
+    CHECK(evaluate(fromFen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 0);
+
+    const char* pawnUp = "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1";
+    CHECK(evaluate(fromFen(pawnUp)) == kPawnValue);
+    CHECK(evaluate(fromFen("4k3/8/8/8/8/8/4P3/4K3 b - - 0 1")) == -kPawnValue);  // sign flips with side to move
+    CHECK(evaluate(fromFen("4k3/4p3/8/8/8/8/8/4K3 b - - 0 1")) == kPawnValue);
+    CHECK(evaluate(fromFen("4k3/4p3/8/8/8/8/8/4K3 w - - 0 1")) == -kPawnValue);
+
+    CHECK(evaluate(fromFen("4k3/8/8/8/8/8/8/3QK3 w - - 0 1")) == kQueenValue);
+    CHECK(evaluate(fromFen("3qk3/8/8/8/8/8/8/4K3 b - - 0 1")) == kQueenValue);
+    CHECK(evaluate(fromFen("3qk3/8/8/8/8/8/8/4K3 w - - 0 1")) == -kQueenValue);
+
+    CHECK(pieceValue(PieceType::Knight) == 320 && pieceValue(PieceType::Bishop) == 330);
+    CHECK(pieceValue(PieceType::Rook) == 500 && pieceValue(PieceType::King) == 0);
+    // R vs N+B: 500 - 650
+    CHECK(evaluate(fromFen("1nb1k3/8/8/8/8/8/8/R3K3 w - - 0 1")) == 500 - 320 - 330);
+    // Evaluation sees only material, so it is identical for a position and its colour-mirror
+    CHECK(evaluate(Position::startingPosition()) == 0);
+}
+
+void testSearch() {
+    using namespace engine;
+    int score = 0;
+
+    // Captures an undefended queen (White, then Black), at several depths
+    for (int d = 1; d <= 3; ++d) {
+        CHECK(bestMoveText("4k3/8/8/3q4/8/8/8/3RK3 w - - 0 1", d, &score) == "d1d5");
+        if (d == 1) CHECK(score == kRookValue);
+        CHECK(bestMoveText("3rk3/8/8/8/3Q4/8/8/4K3 b - - 0 1", d, &score) == "d8d4");
+        if (d == 1) CHECK(score == kRookValue);  // Black wins White's queen but still has only a rook
+    }
+
+    // Poisoned pawn: depth 1 is greedy and grabs it; depth >= 2 sees the recapture. White and Black.
+    CHECK(bestMoveText("4k3/8/2p5/3p4/8/8/8/3QK3 w - - 0 1", 1) == "d1d5");
+    CHECK(bestMoveText("4k3/8/2p5/3p4/8/8/8/3QK3 w - - 0 1", 2, &score) != "d1d5");
+    CHECK(score >= 0);
+    CHECK(bestMoveText("4k3/8/2p5/3p4/8/8/8/3QK3 w - - 0 1", 3) != "d1d5");
+    CHECK(bestMoveText("3qk3/8/8/8/3P4/2P5/8/4K3 b - - 0 1", 1) == "d8d4");
+    CHECK(bestMoveText("3qk3/8/8/8/3P4/2P5/8/4K3 b - - 0 1", 2, &score) != "d8d4");
+    CHECK(score >= 0);
+
+    // Mate in one, both colours; fastest mate gets MATE - 1 regardless of depth
+    for (int d = 1; d <= 3; ++d) {
+        CHECK(bestMoveText("6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1", d, &score) == "a1a8");
+        CHECK(score == kMateScore - 1);
+        CHECK(bestMoveText("r3k3/8/8/8/8/8/5PPP/6K1 b - - 0 1", d, &score) == "a8a1");
+        CHECK(score == kMateScore - 1);
+    }
+
+    // Prefers checkmate over winning a rook
+    {
+        const char* fen = "6k1/5ppp/8/8/8/8/7r/R3K2R w - - 0 1";
+        CHECK(legalOf(fromFen(fen)).count("h1h2"));
+        CHECK(bestMoveText(fen, 1, &score) == "a1a8");
+        CHECK(score == kMateScore - 1);
+        CHECK(bestMoveText(fen, 2, &score) == "a1a8");
+        CHECK(bestMoveText(fen, 3, &score) == "a1a8");
+        CHECK(score == kMateScore - 1);
+    }
+
+    // Mate in two scores MATE - 3 (mate found at ply 3)
+    CHECK(bestMoveText("7k/8/8/8/8/8/R7/1R4K1 w - - 0 1", 3, &score) != "none");
+    CHECK(score == kMateScore - 3);
+
+    // Terminal root positions
+    {
+        const SearchResult st = findBestMove(fromFen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"), 3);
+        CHECK(st.score == 0 && st.bestMove.isNull());
+        const SearchResult mated = findBestMove(
+            fromFen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3"), 3);
+        CHECK(mated.score == -kMateScore && mated.bestMove.isNull());
+        CHECK(isMateScore(mated.score) && matePlies(mated.score) == 0);
+        CHECK(!isMateScore(900) && matePlies(kMateScore - 3) == 3);
+    }
+    // Stalemate inside the search scores 0: Qf7 stalemates, Qf8 mates, so the mate must be chosen
+    {
+        const Position p = fromFen("7k/8/6K1/5Q2/8/8/8/8 w - - 0 1");
+        const std::string best = bestMoveText("7k/8/6K1/5Q2/8/8/8/8 w - - 0 1", 2, &score);
+        CHECK(best != "f5f7" && score == kMateScore - 1);  // several mates exist (e.g. Qf8, Qc8); not the stalemate
+        Position afterBest = p;
+        applyText(afterBest, best.c_str());
+        CHECK(getGameStatus(afterBest) == GameStatus::Checkmate);
+        Position stalemated = p;
+        applyText(stalemated, "f5f7");
+        CHECK(getGameStatus(stalemated) == GameStatus::Stalemate);
+        std::uint64_t nodes = 0;
+        CHECK(negamax(stalemated, 0, 1, nodes) == 0 && nodes == 1);
+        Position mated = p;
+        applyText(mated, "f5f8");
+        nodes = 0;
+        CHECK(negamax(mated, 5, 1, nodes) == -(kMateScore - 1));
+    }
+    // Node counts equal the sum of perft over the depths (no pruning, no terminal shortcuts here)
+    {
+        const Position start = Position::startingPosition();
+        CHECK(findBestMove(start, 1).stats.nodes == 21);
+        CHECK(findBestMove(start, 2).stats.nodes == 421);
+        CHECK(findBestMove(start, 3).stats.nodes == 9323);
+        CHECK(findBestMove(start, 3).stats.depth == 3);
+        CHECK(findBestMove(start, 2).stats.seconds >= 0.0);
+        CHECK(!findBestMove(start, 2).bestMove.isNull());
+    }
+
+    // The player: legal move, diagnostics, Black as well as White
+    {
+        std::ostringstream diag;
+        players::ComputerPlayer white(2, &diag);
+        const Position start = Position::startingPosition();
+        const MoveList legal = generateLegalMoves(start);
+        const Move m = white.chooseMove(start, legal);
+        CHECK(findMove(legal, moveToString(m).c_str()) != nullptr);
+        const std::string d = diag.str();
+        CHECK(d.find("Computer plays: ") != std::string::npos);
+        CHECK(d.find("Evaluation: +0") != std::string::npos);
+        CHECK(d.find("Depth: 2") != std::string::npos);
+        CHECK(d.find("Nodes searched: 421") != std::string::npos);
+        CHECK(d.find("Time: ") != std::string::npos);
+
+        std::ostringstream diag2;
+        players::ComputerPlayer black(1, &diag2);
+        const Position bpos = fromFen("3rk3/8/8/8/3Q4/8/8/4K3 b - - 0 1");
+        const Move bm = black.chooseMove(bpos, generateLegalMoves(bpos));
+        CHECK(moveToString(bm) == "d8d4");
+        CHECK(diag2.str().find("Evaluation: -500") != std::string::npos);  // reported from White's view
+        std::ostringstream diag3;
+        players::ComputerPlayer matedIn(2, &diag3);
+        const Position mp = fromFen("r3k3/8/8/8/8/8/5PPP/6K1 b - - 0 1");
+        matedIn.chooseMove(mp, generateLegalMoves(mp));
+        CHECK(diag3.str().find("mate in 1 for Black") != std::string::npos);
+    }
+
+    // Search computers play legal games (also against the random player), both colours
+    {
+        players::ComputerPlayer w(2), b(2);
+        const ui::GameResult r = play(w, b, nullptr, 30);
+        CHECK(r.outcome == ui::GameOutcome::PlyLimit && r.plies == 30);
+        players::ComputerPlayer sw(2);
+        players::RandomComputerPlayer rb(11);
+        const ui::GameResult r2 = play(sw, rb, nullptr, 40);
+        CHECK(r2.outcome != ui::GameOutcome::IllegalMove);
+        players::RandomComputerPlayer rw(11);
+        players::ComputerPlayer sb(2);
+        const ui::GameResult r3 = play(rw, sb, nullptr, 40);
+        CHECK(r3.outcome != ui::GameOutcome::IllegalMove);
     }
 }
 }  // namespace
@@ -716,6 +882,8 @@ int main() {
     testSpecialMoves();
     testPerft();
     testPlayers();
+    testEvaluation();
+    testSearch();
     const Position p = Position::startingPosition();
     CHECK(p.sideToMove == Color::White);
     CHECK(p.board.at(makeSquare(4, 0)) == (Piece{PieceType::King, Color::White}));
@@ -764,12 +932,5 @@ int main() {
     std::cout << (failures ? "Tests failed\n" : "All tests passed\n");
     return failures;
 }
-
-
-
-
-
-
-
 
 
