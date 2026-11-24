@@ -8,6 +8,7 @@
 #include "../src/chess/MoveGenerator.h"
 #include "../src/chess/Perft.h"
 #include "../src/engine/Evaluation.h"
+#include "../src/engine/MoveOrdering.h"
 #include "../src/engine/Search.h"
 #include "../src/players/ComputerPlayer.h"
 #include "../src/players/HumanPlayer.h"
@@ -701,13 +702,15 @@ void testPlayers() {
     }
     // Menu validation
     {
-        std::istringstream in("x\n4\n\n2\n 1 \n3\n");
+        std::istringstream in("x\n5\n\n2\n 1 \n3\n");
         std::ostringstream out;
         CHECK(ui::promptPlayerKind(in, out, "White") == ui::PlayerKind::RandomComputer);
-        CHECK(out.str().find("Please enter 1, 2 or 3.") != std::string::npos);
+        CHECK(out.str().find("Please enter 1, 2, 3 or 4.") != std::string::npos);
         CHECK(ui::promptPlayerKind(in, out, "Black") == ui::PlayerKind::Human);
         CHECK(ui::promptPlayerKind(in, out, "Black") == ui::PlayerKind::SearchComputer);
         CHECK(!ui::promptPlayerKind(in, out, "Black").has_value());
+        std::istringstream in4("4\n");
+        CHECK(ui::promptPlayerKind(in4, out, "Black") == ui::PlayerKind::BasicSearchComputer);
 
         std::istringstream d("0\n7\nabc\n12\n\n5\n");
         std::ostringstream dout;
@@ -725,25 +728,25 @@ std::string bestMoveText(const char* fen, int depth, int* score = nullptr) {
 
 void testEvaluation() {
     using namespace engine;
-    CHECK(evaluate(Position::startingPosition()) == 0);
-    CHECK(evaluate(fromFen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 0);
+    CHECK(evaluateMaterial(Position::startingPosition()) == 0);
+    CHECK(evaluateMaterial(fromFen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")) == 0);
 
     const char* pawnUp = "4k3/8/8/8/8/8/4P3/4K3 w - - 0 1";
-    CHECK(evaluate(fromFen(pawnUp)) == kPawnValue);
-    CHECK(evaluate(fromFen("4k3/8/8/8/8/8/4P3/4K3 b - - 0 1")) == -kPawnValue);  // sign flips with side to move
-    CHECK(evaluate(fromFen("4k3/4p3/8/8/8/8/8/4K3 b - - 0 1")) == kPawnValue);
-    CHECK(evaluate(fromFen("4k3/4p3/8/8/8/8/8/4K3 w - - 0 1")) == -kPawnValue);
+    CHECK(evaluateMaterial(fromFen(pawnUp)) == kPawnValue);
+    CHECK(evaluateMaterial(fromFen("4k3/8/8/8/8/8/4P3/4K3 b - - 0 1")) == -kPawnValue);  // sign flips with side to move
+    CHECK(evaluateMaterial(fromFen("4k3/4p3/8/8/8/8/8/4K3 b - - 0 1")) == kPawnValue);
+    CHECK(evaluateMaterial(fromFen("4k3/4p3/8/8/8/8/8/4K3 w - - 0 1")) == -kPawnValue);
 
-    CHECK(evaluate(fromFen("4k3/8/8/8/8/8/8/3QK3 w - - 0 1")) == kQueenValue);
-    CHECK(evaluate(fromFen("3qk3/8/8/8/8/8/8/4K3 b - - 0 1")) == kQueenValue);
-    CHECK(evaluate(fromFen("3qk3/8/8/8/8/8/8/4K3 w - - 0 1")) == -kQueenValue);
+    CHECK(evaluateMaterial(fromFen("4k3/8/8/8/8/8/8/3QK3 w - - 0 1")) == kQueenValue);
+    CHECK(evaluateMaterial(fromFen("3qk3/8/8/8/8/8/8/4K3 b - - 0 1")) == kQueenValue);
+    CHECK(evaluateMaterial(fromFen("3qk3/8/8/8/8/8/8/4K3 w - - 0 1")) == -kQueenValue);
 
     CHECK(pieceValue(PieceType::Knight) == 320 && pieceValue(PieceType::Bishop) == 330);
     CHECK(pieceValue(PieceType::Rook) == 500 && pieceValue(PieceType::King) == 0);
     // R vs N+B: 500 - 650
-    CHECK(evaluate(fromFen("1nb1k3/8/8/8/8/8/8/R3K3 w - - 0 1")) == 500 - 320 - 330);
+    CHECK(evaluateMaterial(fromFen("1nb1k3/8/8/8/8/8/8/R3K3 w - - 0 1")) == 500 - 320 - 330);
     // Evaluation sees only material, so it is identical for a position and its colour-mirror
-    CHECK(evaluate(Position::startingPosition()) == 0);
+    CHECK(evaluateMaterial(Position::startingPosition()) == 0);
 }
 
 void testSearch() {
@@ -872,6 +875,282 @@ void testSearch() {
         CHECK(r3.outcome != ui::GameOutcome::IllegalMove);
     }
 }
+Position mirrored(const Position& p) {  // flips ranks and swaps colours (and the side to move)
+    Position m;
+    m.sideToMove = opposite(p.sideToMove);
+    for (int sq = 0; sq < 64; ++sq) {
+        const Piece x = p.board.at(static_cast<Square>(sq));
+        if (!x.empty())
+            m.board.set(makeSquare(fileOf(static_cast<Square>(sq)), 7 - rankOf(static_cast<Square>(sq))),
+                        Piece{x.type, opposite(x.color)});
+    }
+    return m;
+}
+
+const char* kTestFens[] = {
+    kStartingFen,
+    "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+    "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+    "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+    "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+    "4k3/8/8/8/8/8/8/R3K3 w - - 0 1",
+    "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3"};
+
+void testPositionalEvaluation() {
+    using namespace engine;
+    const Color W = Color::White, B = Color::Black;
+
+    // Piece-square tables: centralised knight beats a corner knight (both colours)
+    {
+        const Position centre = fromFen("4k3/8/8/8/3N4/8/8/4K3 w - - 0 1");
+        const Position corner = fromFen("4k3/8/8/8/8/8/8/N3K3 w - - 0 1");
+        CHECK(pieceSquareScore(centre, W) > pieceSquareScore(corner, W));
+        CHECK(evaluate(centre) > evaluate(corner));
+        const Position bCentre = fromFen("4k3/8/8/3n4/8/8/8/4K3 b - - 0 1");
+        const Position bCorner = fromFen("n3k3/8/8/8/8/8/8/4K3 b - - 0 1");
+        CHECK(pieceSquareScore(bCentre, B) > pieceSquareScore(bCorner, B));
+        CHECK(pieceSquareScore(bCentre, B) == pieceSquareScore(centre, W));  // Black tables are mirrored
+        CHECK(pieceSquareScore(fromFen("4k3/8/8/8/8/3P4/8/4K3 w - - 0 1"), W) >
+              pieceSquareScore(fromFen("4k3/8/8/8/8/8/3P4/4K3 w - - 0 1"), W));  // advancing a d-pawn pays
+    }
+    // Material dominates: a knight stuck in the corner is still worth far more than any bonus
+    CHECK(evaluate(fromFen("4k3/8/8/8/8/8/8/N3K3 w - - 0 1")) > 200);
+    CHECK(evaluate(fromFen("4k3/8/8/8/8/8/P7/4K3 w - - 0 1")) > 60);
+
+    // Pawn structure
+    {
+        const Position blockers = fromFen("4k3/3ppp2/8/8/8/8/8/4K3 w - - 0 1");  // black pawns d7 e7 f7
+        auto withWhite = [](const char* pawns) {  // white pawns placed on an otherwise fixed position
+            std::string fen = std::string("4k3/3ppp2/8/8/") + pawns + " w - - 0 1";
+            return fromFen(fen.c_str());
+        };
+        (void)blockers;
+        const int solid = pawnStructureScore(withWhite("8/8/3PPP2/4K3"), W);
+        const int doubled = pawnStructureScore(withWhite("8/4P3/3PP3/4K3"), W);
+        CHECK(solid == 0);
+        CHECK(doubled == -kDoubledPawnPenalty);
+
+        // Isolated: a2+b2 are connected, a2+c2 are both isolated (black pawns a7 b7 c7 stop passed bonuses)
+        const Position connected = fromFen("4k3/ppp5/8/8/8/8/PP6/4K3 w - - 0 1");
+        const Position apart = fromFen("4k3/ppp5/8/8/8/8/P1P5/4K3 w - - 0 1");
+        CHECK(pawnStructureScore(connected, W) == 0);
+        CHECK(pawnStructureScore(apart, W) == -2 * kIsolatedPawnPenalty);
+
+        // Passed pawn: e5 against a7 is passed, against d7 (adjacent file, ahead) it is not
+        const Position passed = fromFen("4k3/p7/8/4P3/8/8/8/4K3 w - - 0 1");
+        const Position notPassed = fromFen("4k3/3p4/8/4P3/8/8/8/4K3 w - - 0 1");
+        CHECK(pawnStructureScore(passed, W) - pawnStructureScore(notPassed, W) == kPassedPawnBonus[4]);
+        // A blocked pawn on the same file is not passed either
+        const Position blocked = fromFen("4k3/4p3/8/4P3/8/8/8/4K3 w - - 0 1");
+        CHECK(pawnStructureScore(blocked, W) < pawnStructureScore(passed, W));
+        // The bonus grows with advancement, and works for Black
+        CHECK(pawnStructureScore(fromFen("4k3/8/4P3/8/8/8/8/4K3 w - - 0 1"), W) >
+              pawnStructureScore(fromFen("4k3/8/8/8/4P3/8/8/4K3 w - - 0 1"), W));
+        CHECK(pawnStructureScore(fromFen("4k3/8/8/8/8/8/8/p3K3 b - - 0 1"), B) ==
+              pawnStructureScore(fromFen("P3k3/8/8/8/8/8/8/4K3 w - - 0 1"), W));
+        CHECK(evaluate(passed) > evaluate(notPassed));
+    }
+    // Bishop pair
+    {
+        CHECK(bishopPairScore(fromFen("4k3/8/8/8/8/8/8/2B1KB2 w - - 0 1"), W) == kBishopPairBonus);
+        CHECK(bishopPairScore(fromFen("4k3/8/8/8/8/8/8/2B1K3 w - - 0 1"), W) == 0);
+        CHECK(bishopPairScore(fromFen("4k3/8/8/8/8/8/8/2B1KN2 w - - 0 1"), W) == 0);
+        CHECK(bishopPairScore(fromFen("2b1kb2/8/8/8/8/8/8/4K3 b - - 0 1"), B) == kBishopPairBonus);
+    }
+    // Mobility: an open rook beats a hemmed-in one; it counts squares, not moves into friends
+    {
+        const Position open = fromFen("4k3/8/8/8/8/8/8/R3K3 w - - 0 1");
+        const Position boxed = fromFen("4k3/8/8/8/8/8/P7/RP2K3 w - - 0 1");
+        CHECK(mobilityScore(open, W) > mobilityScore(boxed, W));
+        CHECK(mobilityScore(fromFen("4k3/8/8/8/3N4/8/8/4K3 w - - 0 1"), W) == 8 * kKnightMobility);
+        CHECK(mobilityScore(Position::startingPosition(), W) == mobilityScore(Position::startingPosition(), B));
+    }
+    // King: endgame rewards centralisation, middlegame does not
+    {
+        const Position egCentre = fromFen("4k3/8/8/8/3K4/8/8/R7 w - - 0 1");
+        const Position egCorner = fromFen("4k3/8/8/8/8/8/8/K6R w - - 0 1");
+        CHECK(endgameWeight(egCentre) == kPhaseScale);
+        CHECK(kingScore(egCentre, W) > kingScore(egCorner, W));
+        CHECK(evaluate(egCentre) > evaluate(egCorner));
+
+        const Position castled = fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQ1RK1 w - - 0 1");
+        const Position home = fromFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQK2R w - - 0 1");
+        const Position exposed = fromFen("rnbqkbnr/pppppppp/8/8/4K3/8/PPPPPPPP/RNBQ1BNR w - - 0 1");
+        CHECK(endgameWeight(castled) == 0);
+        CHECK(kingScore(castled, W) > kingScore(home, W));
+        CHECK(kingScore(home, W) > kingScore(exposed, W));
+        // Phase is monotonic with material
+        CHECK(endgameWeight(fromFen("4k3/8/8/8/8/8/8/R3K2R w - - 0 1")) == kPhaseScale);
+        const int mid = endgameWeight(fromFen("r1b1k2r/8/8/8/8/8/8/R1B1K2R w - - 0 1"));
+        CHECK(mid > 0 && mid < kPhaseScale);
+    }
+    // Mop-up: the stronger side wants the losing king on the edge and its own king close
+    {
+        const Position good = fromFen("7k/8/6K1/8/8/8/8/R7 w - - 0 1");
+        const Position bad = fromFen("4k3/8/8/8/8/8/8/R3K3 w - - 0 1");
+        CHECK(mopUpScore(good) > mopUpScore(bad));
+        CHECK(mopUpScore(good) > 0);
+        CHECK(mopUpScore(mirrored(good)) == -mopUpScore(good));
+        CHECK(mopUpScore(Position::startingPosition()) == 0);
+        CHECK(mopUpScore(fromFen("4k3/8/8/8/8/8/P7/4K3 w - - 0 1")) == 0);  // small edge: no mop-up
+    }
+    // Colour symmetry: a position and its mirror image evaluate identically (each term, then in total)
+    for (const char* fen : kTestFens) {
+        const Position p = fromFen(fen), m = mirrored(p);
+        CHECK(evaluate(p) == evaluate(m));
+        CHECK(evaluateMaterial(p) == evaluateMaterial(m));
+        for (Color c : {W, B}) {
+            CHECK(pieceSquareScore(p, c) == pieceSquareScore(m, opposite(c)));
+            CHECK(kingScore(p, c) == kingScore(m, opposite(c)));
+            CHECK(mobilityScore(p, c) == mobilityScore(m, opposite(c)));
+            CHECK(pawnStructureScore(p, c) == pawnStructureScore(m, opposite(c)));
+            CHECK(bishopPairScore(p, c) == bishopPairScore(m, opposite(c)));
+        }
+    }
+    CHECK(evaluate(Position::startingPosition()) == 0);
+    // Side-to-move perspective: flipping the side to move negates the score
+    for (const char* fen : kTestFens) {
+        Position p = fromFen(fen);
+        const int w = evaluate(p);
+        p.sideToMove = opposite(p.sideToMove);
+        CHECK(evaluate(p) == -w);
+    }
+}
+
+void testMoveOrdering() {
+    using namespace engine;
+    {
+        Position p = fromFen("4k3/8/8/3q4/4P3/8/8/4K3 w - - 0 1");
+        MoveList moves = generateLegalMoves(p);
+        orderMoves(p, moves);
+        CHECK(moves.size() == generateLegalMoves(p).size());
+        CHECK(moveToString(moves[0]) == "e4d5");  // pawn takes queen first
+    }
+    {
+        Position p = fromFen("4k3/8/8/3q1p2/4P3/8/8/3RK3 w - - 0 1");
+        MoveList moves = generateLegalMoves(p);
+        orderMoves(p, moves);
+        CHECK(moveToString(moves[0]) == "e4d5");  // PxQ before RxQ (least valuable attacker)
+        CHECK(moveToString(moves[1]) == "d1d5");
+        CHECK(moveToString(moves[2]) == "e4f5");  // then PxP
+        CHECK(!moves[3].has(MoveFlagCapture));
+    }
+    {
+        Position p = fromFen("8/P6k/8/8/8/8/8/K7 w - - 0 1");
+        MoveList moves = generateLegalMoves(p);
+        orderMoves(p, moves);
+        CHECK(moveToString(moves[0]) == "a7a8q");
+        for (int i = 0; i < 4; ++i) CHECK(moves[static_cast<std::size_t>(i)].promotion != PieceType::None);
+        CHECK(moves[4].promotion == PieceType::None);
+    }
+}
+
+void testAlphaBeta() {
+    using namespace engine;
+    struct Case { const char* fen; int depth; };
+    const Case cases[] = {{kTestFens[0], 3}, {kTestFens[1], 2}, {kTestFens[2], 3}, {kTestFens[3], 2},
+                          {kTestFens[4], 2}, {kTestFens[5], 3}, {kTestFens[6], 3},
+                          {"6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1", 3},          // mate in one
+                          {"7k/8/8/8/8/8/R7/1R4K1 w - - 0 1", 3},            // mate in two
+                          {"7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", 2},             // stalemate at the root
+                          {"4k3/8/2p5/3p4/8/8/8/3QK3 w - - 0 1", 3}};        // poisoned pawn
+    std::uint64_t plainTotal = 0, abTotal = 0, orderedTotal = 0;
+    for (const Case& c : cases) {
+        const Position p = fromFen(c.fen);
+        for (int useFull = 0; useFull < 2; ++useFull) {
+            SearchConfig plain = advancedConfig(c.depth);
+            plain.algorithm = SearchAlgorithm::PlainNegamax;
+            plain.moveOrdering = false;
+            SearchConfig ab = plain;
+            ab.algorithm = SearchAlgorithm::AlphaBeta;
+            SearchConfig ordered = ab;
+            ordered.moveOrdering = true;
+            if (!useFull) plain.evaluator = ab.evaluator = ordered.evaluator = evaluateMaterial;
+
+            const SearchResult rp = search(p, plain), ra = search(p, ab), ro = search(p, ordered);
+            CHECK(ra.score == rp.score);
+            CHECK(ro.score == rp.score);
+            CHECK(ra.bestMove.isNull() == rp.bestMove.isNull());
+            CHECK(ro.bestMove.isNull() == rp.bestMove.isNull());
+            CHECK(rp.stats.cutoffs == 0);
+            CHECK(ra.stats.nodes <= rp.stats.nodes && ro.stats.nodes <= rp.stats.nodes);
+            if (useFull) { plainTotal += rp.stats.nodes; abTotal += ra.stats.nodes; orderedTotal += ro.stats.nodes; }
+
+            // The chosen move is genuinely optimal: playing it and searching the reply with plain
+            // negamax at one less depth reproduces the root score.
+            if (!ro.bestMove.isNull() && c.depth >= 2 && !isMateScore(rp.score)) {  // mate scores shift by one ply
+                Position child = p;
+                child.applyMove(ro.bestMove);
+                SearchConfig sub = plain;
+                sub.depth = c.depth - 1;
+                CHECK(-search(child, sub).score == rp.score);
+            }
+        }
+    }
+    CHECK(abTotal < plainTotal && orderedTotal < plainTotal);
+    std::cout << "Alpha-beta test positions, total nodes: plain " << plainTotal << ", alpha-beta " << abTotal
+              << ", alpha-beta + ordering " << orderedTotal << "\n";
+
+    // Fewer nodes and real cutoffs on real positions
+    {
+        const Position start = Position::startingPosition();
+        SearchConfig plain = advancedConfig(3);
+        plain.algorithm = SearchAlgorithm::PlainNegamax;
+        const SearchResult rp = search(start, plain), ra = search(start, advancedConfig(3));
+        CHECK(ra.stats.nodes < rp.stats.nodes / 2);
+        CHECK(ra.stats.cutoffs > 0 && ra.stats.leafNodes > 0 && ra.stats.leafNodes < ra.stats.nodes);
+        CHECK(ra.score == rp.score);
+        CHECK(rp.stats.leafNodes == 8902);  // every depth-3 position of the start tree is a leaf
+    }
+    // Same tactical behaviour with the new engine, for Black too
+    {
+        int score = 0;
+        auto best = [&](const char* fen, int depth) {
+            const SearchResult r = search(fromFen(fen), advancedConfig(depth));
+            score = r.score;
+            return r.bestMove.isNull() ? std::string("none") : moveToString(r.bestMove);
+        };
+        CHECK(best("4k3/8/8/3q4/8/8/8/3RK3 w - - 0 1", 3) == "d1d5");
+        CHECK(best("3rk3/8/8/8/3Q4/8/8/4K3 b - - 0 1", 3) == "d8d4");
+        CHECK(best("6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1", 3) == "a1a8" && score == kMateScore - 1);
+        CHECK(best("r3k3/8/8/8/8/8/5PPP/6K1 b - - 0 1", 3) == "a8a1" && score == kMateScore - 1);
+        CHECK(best("6k1/5ppp/8/8/8/8/7r/R3K2R w - - 0 1", 3) == "a1a8");
+        CHECK(best("4k3/8/2p5/3p4/8/8/8/3QK3 w - - 0 1", 3) != "d1d5");
+        CHECK(best("3qk3/8/8/8/3P4/2P5/8/4K3 b - - 0 1", 3) != "d8d4");
+        CHECK(best("7k/8/8/8/8/8/R7/1R4K1 w - - 0 1", 3) != "none" && score == kMateScore - 3);
+        CHECK(best("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", 3) == "none" && score == 0);
+        CHECK(best("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3", 3) == "none" &&
+              score == -kMateScore);
+        // Positional evaluation does not make the engine give up a knight for a nicer square
+        CHECK(best("4k3/8/8/8/3p4/2N5/8/4K3 w - - 0 1", 3) != "none");
+        const SearchResult r = search(fromFen("4k3/8/8/8/8/8/8/N3K3 w - - 0 1"), advancedConfig(3));
+        CHECK(r.score > 200);  // keeps the knight even when it starts in the corner
+        // A mirrored position gives the same score (Black searched exactly like White)
+        for (const char* fen : {kTestFens[1], kTestFens[3], kTestFens[6]}) {
+            const Position p = fromFen(fen);
+            CHECK(search(p, advancedConfig(2)).score == search(mirrored(p), advancedConfig(2)).score);
+        }
+    }
+    // Players with the new configurations
+    {
+        std::ostringstream diag;
+        players::ComputerPlayer p(advancedConfig(3), &diag);
+        const Position start = Position::startingPosition();
+        const MoveList legal = generateLegalMoves(start);
+        const Move m = p.chooseMove(start, legal);
+        CHECK(findMove(legal, moveToString(m).c_str()) != nullptr);
+        CHECK(diag.str().find("alpha-beta") != std::string::npos);
+        CHECK(diag.str().find("Cutoffs: ") != std::string::npos);
+        CHECK(p.depth() == 3);
+
+        players::ComputerPlayer adv(advancedConfig(2)), basic(basicConfig(2));
+        const ui::GameResult r1 = play(adv, basic, nullptr, 30);
+        const ui::GameResult r2 = play(basic, adv, nullptr, 30);
+        CHECK(r1.outcome != ui::GameOutcome::IllegalMove && r2.outcome != ui::GameOutcome::IllegalMove);
+        CHECK(basicConfig(2).algorithm == SearchAlgorithm::PlainNegamax);
+        CHECK(std::string(describe(SearchAlgorithm::AlphaBeta)) == "alpha-beta");
+    }
+}
 }  // namespace
 
 int main() {
@@ -884,6 +1163,9 @@ int main() {
     testPlayers();
     testEvaluation();
     testSearch();
+    testPositionalEvaluation();
+    testMoveOrdering();
+    testAlphaBeta();
     const Position p = Position::startingPosition();
     CHECK(p.sideToMove == Color::White);
     CHECK(p.board.at(makeSquare(4, 0)) == (Piece{PieceType::King, Color::White}));
@@ -932,5 +1214,8 @@ int main() {
     std::cout << (failures ? "Tests failed\n" : "All tests passed\n");
     return failures;
 }
+
+
+
 
 

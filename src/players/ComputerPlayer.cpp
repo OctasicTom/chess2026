@@ -4,17 +4,21 @@
 #include <ostream>
 #include "../chess/Notation.h"
 #include "../engine/Evaluation.h"
-#include "../engine/Search.h"
 
 namespace players {
 
 ComputerPlayer::ComputerPlayer(int depth, std::ostream* diagnostics)
-    : depth_(std::max(depth, 1)), diagnostics_(diagnostics) {}
+    : ComputerPlayer(engine::basicConfig(std::max(depth, 1)), diagnostics) {}
+
+ComputerPlayer::ComputerPlayer(const engine::SearchConfig& config, std::ostream* diagnostics)
+    : config_(config), diagnostics_(diagnostics) {
+    config_.depth = std::max(config_.depth, 1);
+}
 
 chess::Move ComputerPlayer::chooseMove(const chess::Position& position,
                                        const std::vector<chess::Move>& legalMoves) {
     if (legalMoves.empty()) return chess::Move{};
-    const engine::SearchResult result = engine::findBestMove(position, depth_);
+    const engine::SearchResult result = engine::search(position, config_);
 
     if (diagnostics_) {
         std::ostream& out = *diagnostics_;
@@ -30,9 +34,11 @@ chess::Move ComputerPlayer::chooseMove(const chess::Position& position,
         } else {
             out << "Evaluation: " << (whiteScore >= 0 ? "+" : "") << whiteScore << " (White's view)\n";
         }
-        out << "Depth: " << result.stats.depth << '\n'
-            << "Nodes searched: " << result.stats.nodes << '\n'
-            << "Time: " << std::fixed << std::setprecision(2) << result.stats.seconds << " seconds\n";
+        out << "Depth: " << result.stats.depth << " (" << engine::describe(config_.algorithm) << ")\n"
+            << "Nodes searched: " << result.stats.nodes << '\n';
+        if (config_.algorithm == engine::SearchAlgorithm::AlphaBeta)
+            out << "Cutoffs: " << result.stats.cutoffs << '\n';
+        out << "Time: " << std::fixed << std::setprecision(2) << result.stats.seconds << " seconds\n";
         out.unsetf(std::ios::floatfield);
     }
     return result.bestMove;

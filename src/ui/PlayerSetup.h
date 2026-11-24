@@ -7,12 +7,14 @@
 
 namespace ui {
 
-enum class PlayerKind { Human, RandomComputer, SearchComputer };
+// SearchComputer: alpha-beta + move ordering + positional evaluation.
+// BasicSearchComputer: the Milestone 7 baseline (plain negamax, material only).
+enum class PlayerKind { Human, RandomComputer, SearchComputer, BasicSearchComputer };
 
 constexpr int kDefaultSearchDepth = 3;
 constexpr int kMaxSearchDepth = 6;
 
-// Asks for 1 (Human), 2 (Random Computer) or 3 (Search Computer) until valid. nullopt at end of input.
+// Asks for 1 (Human), 2 (Random), 3 (Search) or 4 (Basic Search) until valid. nullopt at end of input.
 std::optional<PlayerKind> promptPlayerKind(std::istream& in, std::ostream& out, const char* colorName);
 
 // Asks for a search depth in 1..kMaxSearchDepth; an empty answer selects the default.
@@ -25,3 +27,4 @@ std::unique_ptr<players::Player> makePlayer(PlayerKind kind, std::istream& in, s
                                             int searchDepth = kDefaultSearchDepth);
 
 }  // namespace ui
+
