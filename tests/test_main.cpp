@@ -7,7 +7,10 @@
 #include "../src/chess/Fen.h"
 #include "../src/chess/MoveGenerator.h"
 #include "../src/chess/Perft.h"
+#include "../src/players/HumanPlayer.h"
+#include "../src/players/RandomComputerPlayer.h"
 #include "../src/ui/GameLoop.h"
+#include "../src/ui/PlayerSetup.h"
 #include "../src/chess/Notation.h"
 #include "../src/chess/Position.h"
 
@@ -551,29 +554,157 @@ void testPerft() {
     CHECK(perft(p5, 1) == 44 && perft(p5, 2) == 1486 && perft(p5, 3) == 62379);
 }
 
-void testGameLoop() {
-    std::istringstream in("f2f3\nzz\ne2e5\ne7e8\ne7e5\ne7e5\ng2g4\nd8h4\n");
+// Plays back a fixed list of coordinate moves, to show the loop treats every Player alike.
+class ScriptedPlayer : public players::Player {
+public:
+    explicit ScriptedPlayer(std::vector<std::string> moves) : moves_(std::move(moves)) {}
+    Move chooseMove(const Position&, const std::vector<Move>& legal) override {
+        if (next_ >= moves_.size()) return Move{};
+        for (const Move& m : legal) if (moveToString(m) == moves_[next_]) { ++next_; return m; }
+        return Move{1, 1, PieceType::None, 0};  // deliberately not legal
+    }
+private:
+    std::vector<std::string> moves_;
+    std::size_t next_ = 0;
+};
+
+ui::GameResult play(players::Player& w, players::Player& b, std::string* output = nullptr,
+                    int maxPlies = 0, Position start = Position::startingPosition()) {
     std::ostringstream out;
-    ui::runHumanVsHuman(in, out, Position::startingPosition());
-    const std::string s = out.str();
-    CHECK(s.find("Invalid input") != std::string::npos);
-    CHECK(s.find("Illegal move: e2e5") != std::string::npos);  // black to move: no black piece on e2
-    CHECK(s.find("Checkmate! Black wins.") != std::string::npos);
-    std::istringstream inC("quit\n");
-    std::ostringstream outC;
-    ui::runHumanVsHuman(inC, outC, fromFen("4r1k1/8/8/8/8/8/8/4K3 w - - 0 1"));
-    CHECK(outC.str().find("White is in check.") != std::string::npos);
+    ui::GameOptions opt;
+    opt.maxPlies = maxPlies;
+    const ui::GameResult r = ui::runGame(w, b, out, start, opt);
+    if (output) *output = out.str();
+    return r;
+}
 
-    std::istringstream in2("a7a8\na7a8q\nquit\n");
-    std::ostringstream out2;
-    ui::runHumanVsHuman(in2, out2, fromFen("8/P6k/8/8/8/8/8/K7 w - - 0 1"));
-    CHECK(out2.str().find("Promotion piece required") != std::string::npos);
-    CHECK(out2.str().find("Game abandoned.") != std::string::npos);
+void testPlayers() {
+    // Human vs Human (scripted input, with invalid and illegal entries along the way)
+    {
+        std::istringstream in("f2f3\nzz\ne2e5\ne7e8\ne7e5\ne7e5\ng2g4\nd8h4\n");
+        std::ostringstream out;
+        players::HumanPlayer w(in, out), b(in, out);
+        ui::GameResult r = ui::runGame(w, b, out, Position::startingPosition());
+        const std::string s = out.str();
+        CHECK(r.outcome == ui::GameOutcome::Checkmate && r.winner == Color::Black && r.plies == 4);
+        CHECK(s.find("Invalid input") != std::string::npos);
+        CHECK(s.find("Illegal move: e2e5") != std::string::npos);
+        CHECK(s.find("Checkmate! Black wins.") != std::string::npos);
+        CHECK(s.find("White plays f2f3") != std::string::npos);
+    }
+    {
+        std::istringstream in("quit\n");
+        std::ostringstream out;
+        players::HumanPlayer h(in, out);
+        ui::GameResult r = ui::runGame(h, h, out, fromFen("4r1k1/8/8/8/8/8/8/4K3 w - - 0 1"));
+        CHECK(out.str().find("White is in check.") != std::string::npos);
+        CHECK(r.outcome == ui::GameOutcome::Abandoned && r.plies == 0);
+    }
+    {
+        std::istringstream in("a7a8\na7a8q\nquit\n");
+        std::ostringstream out;
+        players::HumanPlayer h(in, out);
+        ui::GameResult r = ui::runGame(h, h, out, fromFen("8/P6k/8/8/8/8/8/K7 w - - 0 1"));
+        CHECK(out.str().find("Promotion piece required") != std::string::npos);
+        CHECK(r.plies == 1 && r.outcome == ui::GameOutcome::Abandoned);  // promoted, then quit as Black
+    }
+    {
+        std::istringstream in("");  // end of input behaves like quit
+        std::ostringstream out;
+        players::HumanPlayer h(in, out);
+        CHECK(play(h, h, nullptr, 0, fromFen("4k3/8/8/8/8/8/8/4K3 w - - 0 1")).outcome ==
+              ui::GameOutcome::Abandoned);
+        std::istringstream in3("");
+        std::ostringstream out3;
+        players::HumanPlayer h3(in3, out3);
+        std::ostringstream o;
+        CHECK(ui::runGame(h3, h3, o, fromFen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1")).outcome ==
+              ui::GameOutcome::Stalemate);
+    }
+    // Scripted players: same loop, no console
+    {
+        ScriptedPlayer w({"f2f3", "g2g4"}), b({"e7e5", "d8h4"});
+        const ui::GameResult r = play(w, b);
+        CHECK(r.outcome == ui::GameOutcome::Checkmate && r.winner == Color::Black);
+        ScriptedPlayer bad({"e2e5"}), idle({});
+        CHECK(play(bad, idle).outcome == ui::GameOutcome::IllegalMove);
+    }
+    // RandomComputerPlayer: legal, deterministic with a seed, independent of console
+    {
+        const Position start = Position::startingPosition();
+        const MoveList legal = generateLegalMoves(start);
+        players::RandomComputerPlayer a(42), b(42), c(7);
+        bool differs = false;
+        for (int i = 0; i < 50; ++i) {
+            const Move ma = a.chooseMove(start, legal), mb = b.chooseMove(start, legal), mc = c.chooseMove(start, legal);
+            CHECK(findMove(legal, moveToString(ma).c_str()) != nullptr);
+            CHECK(moveToString(ma) == moveToString(mb));
+            if (moveToString(ma) != moveToString(mc)) differs = true;
+        }
+        CHECK(differs);
+        CHECK(a.chooseMove(start, {}).isNull());
+        players::RandomComputerPlayer unseeded;
+        CHECK(findMove(legal, moveToString(unseeded.chooseMove(start, legal)).c_str()) != nullptr);
+    }
+    // Human vs Computer and Computer vs Human
+    {
+        std::istringstream in("e2e4\nquit\n");
+        std::ostringstream out;
+        players::HumanPlayer h(in, out);
+        players::RandomComputerPlayer cpu(1);
+        ui::GameResult r = ui::runGame(h, cpu, out, Position::startingPosition());
+        CHECK(r.plies == 2 && r.outcome == ui::GameOutcome::Abandoned);
+        CHECK(out.str().find("Black plays ") != std::string::npos);
+        CHECK(r.finalPosition.board.at(*squareFromString("e4")) == (Piece{PieceType::Pawn, Color::White}));
+    }
+    {
+        std::istringstream in("quit\n");
+        std::ostringstream out;
+        players::HumanPlayer h(in, out);
+        players::RandomComputerPlayer cpu(1);
+        ui::GameResult r = ui::runGame(cpu, h, out, Position::startingPosition());
+        CHECK(r.plies == 1 && r.outcome == ui::GameOutcome::Abandoned);
+        CHECK(out.str().find("White plays ") != std::string::npos);
+        CHECK(out.str().find("Enter move for Black") != std::string::npos);
+        CHECK(out.str().find("Enter move for White") == std::string::npos);
+    }
+    // Computer vs Computer: complete games with no input, bounded by a ply limit
+    {
+        int mate = 0, stale = 0, limit = 0, longest = 0;
+        for (std::uint32_t seed = 1; seed <= 25; ++seed) {
+            players::RandomComputerPlayer w(seed), b(seed + 1000);
+            const ui::GameResult r = play(w, b, nullptr, 1000);
+            CHECK(r.outcome == ui::GameOutcome::Checkmate || r.outcome == ui::GameOutcome::Stalemate ||
+                  r.outcome == ui::GameOutcome::PlyLimit);
+            CHECK(r.plies <= 1000);
+            if (r.outcome == ui::GameOutcome::Checkmate) ++mate;
+            else if (r.outcome == ui::GameOutcome::Stalemate) ++stale;
+            else ++limit;
+            if (r.plies > longest) longest = r.plies;
+        }
+        std::cout << "Computer-vs-Computer, 25 seeded games: " << mate << " checkmates, " << stale
+                  << " stalemates, " << limit << " hit the 1000-ply limit (longest " << longest << " plies)\n";
+        CHECK(mate + stale + limit == 25);
 
-    std::istringstream in3("");
-    std::ostringstream out3;
-    ui::runHumanVsHuman(in3, out3, fromFen("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"));
-    CHECK(out3.str().find("Stalemate") != std::string::npos);
+        // Reproducible with the same seeds
+        players::RandomComputerPlayer w1(5), b1(6), w2(5), b2(6);
+        const ui::GameResult r1 = play(w1, b1, nullptr, 1000), r2 = play(w2, b2, nullptr, 1000);
+        CHECK(r1.plies == r2.plies && toFen(r1.finalPosition) == toFen(r2.finalPosition));
+
+        // The ply limit really stops a game
+        players::RandomComputerPlayer w3(5), b3(6);
+        const ui::GameResult lim = play(w3, b3, nullptr, 10);
+        CHECK(lim.plies <= 10);
+    }
+    // Menu validation
+    {
+        std::istringstream in("x\n3\n\n2\n 1 \n");
+        std::ostringstream out;
+        CHECK(ui::promptPlayerKind(in, out, "White") == ui::PlayerKind::Computer);
+        CHECK(out.str().find("Please enter 1 or 2.") != std::string::npos);
+        CHECK(ui::promptPlayerKind(in, out, "Black") == ui::PlayerKind::Human);
+        CHECK(!ui::promptPlayerKind(in, out, "Black").has_value());
+    }
 }
 }  // namespace
 
@@ -584,7 +715,7 @@ int main() {
     testFen();
     testSpecialMoves();
     testPerft();
-    testGameLoop();
+    testPlayers();
     const Position p = Position::startingPosition();
     CHECK(p.sideToMove == Color::White);
     CHECK(p.board.at(makeSquare(4, 0)) == (Piece{PieceType::King, Color::White}));
@@ -633,6 +764,8 @@ int main() {
     std::cout << (failures ? "Tests failed\n" : "All tests passed\n");
     return failures;
 }
+
+
 
 
 
